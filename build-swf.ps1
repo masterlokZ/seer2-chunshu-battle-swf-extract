@@ -27,6 +27,41 @@ function Resolve-ExistingPath([string]$Given, [string[]]$Candidates, [string]$La
     throw "$Label not found."
 }
 
+function Test-LfsPointerFile([string]$Path) {
+    try {
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+        if ($item.Length -gt 512) { return $false }
+        $firstLine = Get-Content -LiteralPath $Path -TotalCount 1 -ErrorAction Stop
+        return $firstLine -eq 'version https://git-lfs.github.com/spec/v1'
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-SourceXml([string]$Given) {
+    $candidates = @()
+    if ($Given) {
+        $candidates += if ([System.IO.Path]::IsPathRooted($Given)) { $Given } else { Join-Path $RepoRoot $Given }
+    } else {
+        $candidates += @(
+            (Join-Path $RepoRoot 'source\duizhan_622.xml.gz'),
+            (Join-Path $RepoRoot 'source\duizhan_622.xml'),
+            (Join-Path $RepoRoot 'source.xml')
+        )
+    }
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        $resolved = (Resolve-Path -LiteralPath $candidate).Path
+        if (Test-LfsPointerFile $resolved) {
+            Write-Host "[build] skip lfs pointer: $resolved"
+            continue
+        }
+        return $resolved
+    }
+    throw 'SourceXml not found. The ZIP must contain source\duizhan_622.xml.gz or a real source XML file.'
+}
+
 function Resolve-ToolPath([string]$Given, [string[]]$Candidates, [string]$CommandName, [string]$Label) {
     if ($Given) {
         $path = if ([System.IO.Path]::IsPathRooted($Given)) { $Given } else { Join-Path $RepoRoot $Given }
@@ -78,11 +113,7 @@ function Expand-GZipFile([string]$InputPath, [string]$OutputPath) {
     }
 }
 
-$SourceXml = Resolve-ExistingPath $SourceXml @(
-    (Join-Path $RepoRoot 'source\duizhan_622.xml'),
-    (Join-Path $RepoRoot 'source\duizhan_622.xml.gz'),
-    (Join-Path $RepoRoot 'source.xml')
-) 'SourceXml'
+$SourceXml = Resolve-SourceXml $SourceXml
 
 $FfdecCli = Resolve-ToolPath $FfdecCli @(
     (Join-Path $RepoRoot 'tools\ffdec\ffdec-cli.exe'),
