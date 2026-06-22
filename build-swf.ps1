@@ -1,7 +1,7 @@
 param(
     [string]$BaseSwf = $env:BASE_SWF,
     [string]$FfdecCli = $env:FFDEC_CLI,
-    [string]$OutFile = "dist\duizhan_build.swf",
+    [string]$OutFile = "",
     [switch]$ImportAllScripts,
     [switch]$KeepTemp
 )
@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $RepoRoot
+$BuildTimestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 
 function Resolve-ToolPath([string]$Given, [string[]]$Candidates, [string]$CommandName, [string]$Label) {
     if ($Given -and (Test-Path -LiteralPath $Given)) { return (Resolve-Path -LiteralPath $Given).Path }
@@ -21,17 +22,23 @@ function Resolve-ToolPath([string]$Given, [string[]]$Candidates, [string]$Comman
 }
 
 function Resolve-BaseSwf([string]$Given) {
-    $candidates = @()
-    if ($Given) { $candidates += $Given }
-    $candidates += @(
-        (Join-Path $RepoRoot 'base.swf'),
-        (Join-Path $RepoRoot 'base\base.swf'),
-        (Join-Path $RepoRoot '..\base.swf')
-    )
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) { return (Resolve-Path -LiteralPath $candidate).Path }
+    if ($Given) {
+        if (Test-Path -LiteralPath $Given) { return (Resolve-Path -LiteralPath $Given).Path }
+        throw "Base SWF not found: $Given"
     }
-    throw 'Base SWF not found. Pass -BaseSwf <wrapper-or-decrypted-swf>, set BASE_SWF, or place base.swf in the repo root or base/base.swf.'
+
+    $baseDir = Join-Path $RepoRoot 'base'
+    if (Test-Path -LiteralPath $baseDir) {
+        $latest = Get-ChildItem -LiteralPath $baseDir -Filter '*.swf' -File |
+            Sort-Object LastWriteTime, Name -Descending |
+            Select-Object -First 1
+        if ($latest) { return $latest.FullName }
+    }
+
+    foreach ($candidate in @((Join-Path $RepoRoot 'base.swf'), (Join-Path $RepoRoot '..\base.swf'))) {
+        if (Test-Path -LiteralPath $candidate) { return (Resolve-Path -LiteralPath $candidate).Path }
+    }
+    throw 'Base SWF not found. Pass -BaseSwf <wrapper-or-decrypted-swf>, set BASE_SWF, or place a timestamped .swf under base/.'
 }
 
 $BaseSwf = Resolve-BaseSwf $BaseSwf
@@ -45,6 +52,7 @@ $FfdecCli = Resolve-ToolPath $FfdecCli @(
 $Python = Resolve-ToolPath $env:PYTHON @() 'python.exe' 'Python'
 
 $BuildDir = Join-Path $RepoRoot 'build'
+if ([string]::IsNullOrWhiteSpace($OutFile)) { $OutFile = "dist\duizhan_build_$BuildTimestamp.swf" }
 $OutputPath = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path $RepoRoot $OutFile }
 $DistDir = Split-Path -Parent $OutputPath
 if (-not $DistDir) { $DistDir = $RepoRoot }
