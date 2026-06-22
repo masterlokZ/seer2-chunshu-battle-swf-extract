@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$BaseSwf = $env:BASE_SWF,
     [string]$FfdecCli = $env:FFDEC_CLI,
     [string]$OutFile = "dist\duizhan_build.swf",
@@ -17,7 +17,7 @@ function Resolve-ToolPath([string]$Given, [string[]]$Candidates, [string]$Comman
     foreach ($candidate in $Candidates) {
         if ($candidate -and (Test-Path -LiteralPath $candidate)) { return (Resolve-Path -LiteralPath $candidate).Path }
     }
-    throw "$Label not found. Pass a path parameter or set the matching environment variable."
+    throw "$Label not found. Pass -$Label or set the matching environment variable."
 }
 
 function Resolve-BaseSwf([string]$Given) {
@@ -25,25 +25,28 @@ function Resolve-BaseSwf([string]$Given) {
     if ($Given) { $candidates += $Given }
     $candidates += @(
         (Join-Path $RepoRoot 'base.swf'),
-        (Join-Path $RepoRoot '..\base.swf'),
-        'D:\git仓库\chunshu-personal\log_chunshu2\src\common\local-res\对战版by_春树_622.swf'
+        (Join-Path $RepoRoot 'base\base.swf'),
+        (Join-Path $RepoRoot '..\base.swf')
     )
     foreach ($candidate in $candidates) {
         if ($candidate -and (Test-Path -LiteralPath $candidate)) { return (Resolve-Path -LiteralPath $candidate).Path }
     }
-    throw 'Base SWF not found. Pass -BaseSwf <wrapper-or-decrypted-swf>, set BASE_SWF, or place base.swf next to this script.'
+    throw 'Base SWF not found. Pass -BaseSwf <wrapper-or-decrypted-swf>, set BASE_SWF, or place base.swf in the repo root or base/base.swf.'
 }
 
 $BaseSwf = Resolve-BaseSwf $BaseSwf
 $FfdecCli = Resolve-ToolPath $FfdecCli @(
     (Join-Path $RepoRoot 'ffdec-cli.exe'),
+    (Join-Path $RepoRoot 'tools\ffdec-cli.exe'),
+    (Join-Path $RepoRoot 'tools\ffdec\ffdec-cli.exe'),
     (Join-Path $RepoRoot '..\ffdec-cli.exe'),
-    'D:\git仓库\chunshu-personal\log_chunshu2\tmp\ffdec26\ffdec-cli.exe'
-) 'ffdec-cli.exe' 'Ffdec'
+    (Join-Path $RepoRoot '..\tools\ffdec-cli.exe')
+) 'ffdec-cli.exe' 'FfdecCli'
 $Python = Resolve-ToolPath $env:PYTHON @() 'python.exe' 'Python'
 
 $BuildDir = Join-Path $RepoRoot 'build'
-$DistDir = Split-Path -Parent (Join-Path $RepoRoot $OutFile)
+$OutputPath = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path $RepoRoot $OutFile }
+$DistDir = Split-Path -Parent $OutputPath
 if (-not $DistDir) { $DistDir = $RepoRoot }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
@@ -99,8 +102,8 @@ if __name__ == '__main__':
 $BasePlain = Join-Path $BuildDir 'base.decrypted.swf'
 $PatchedPlain = Join-Path $BuildDir 'patched.decrypted.swf'
 $ImportDir = Join-Path $BuildDir 'import-scripts'
-$OutputPath = Join-Path $RepoRoot $OutFile
 
+Write-Host "[build] repo     : $RepoRoot"
 Write-Host "[build] base swf : $BaseSwf"
 Write-Host "[build] ffdec    : $FfdecCli"
 Write-Host "[build] output   : $OutputPath"
