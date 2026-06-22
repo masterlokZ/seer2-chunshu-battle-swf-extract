@@ -66,8 +66,6 @@ import pathlib
 import sys
 import zlib
 
-ZERO = b'\x00' * 7
-
 def read_payload(path):
     data = pathlib.Path(path).read_bytes()
     if data[:3] in (b'FWS', b'CWS', b'ZWS'):
@@ -80,28 +78,15 @@ def read_payload(path):
     return payload, data[:7].hex(' '), payload[:3].decode('ascii')
 
 def main():
-    if len(sys.argv) != 4 or sys.argv[1] not in ('decrypt', 'encrypt'):
-        raise SystemExit('usage: _swfwrap.py decrypt|encrypt <input> <output>')
+    if len(sys.argv) != 4 or sys.argv[1] != 'decrypt':
+        raise SystemExit('usage: _swfwrap.py decrypt <input> <output>')
     mode, inp, out = sys.argv[1:]
-    if mode == 'decrypt':
-        payload, head, sig = read_payload(inp)
-        pathlib.Path(out).write_bytes(payload)
-        print(f'decrypt input={inp}')
-        print(f'input_head_or_mode={head}')
-        print(f'payload_sig={sig}')
-        print(f'payload_sha256={hashlib.sha256(payload).hexdigest()}')
-        return
-    payload = pathlib.Path(inp).read_bytes()
-    if payload[:3] not in (b'FWS', b'CWS', b'ZWS'):
-        raise SystemExit('encrypt input is not SWF payload')
-    data = ZERO + zlib.compress(payload, level=9)
-    pathlib.Path(out).write_bytes(data)
-    check = zlib.decompress(data[7:])
-    if check != payload:
-        raise SystemExit('roundtrip mismatch')
-    print(f'encrypt output={out}')
-    print('output_head=00 00 00 00 00 00 00')
-    print(f'output_sha256={hashlib.sha256(data).hexdigest()}')
+    payload, head, sig = read_payload(inp)
+    pathlib.Path(out).write_bytes(payload)
+    print(f'decrypt input={inp}')
+    print(f'input_head_or_mode={head}')
+    print(f'payload_sig={sig}')
+    print(f'payload_sha256={hashlib.sha256(payload).hexdigest()}')
 
 if __name__ == '__main__':
     main()
@@ -136,8 +121,12 @@ New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
 & $FfdecCli -onerror abort -importScript $BasePlain $PatchedPlain $ImportDir
 if ($LASTEXITCODE -ne 0) { throw 'FFDec importScript failed' }
 
-& $Python $Helper encrypt $PatchedPlain $OutputPath
-if ($LASTEXITCODE -ne 0) { throw 'zero-header encrypt failed' }
+Copy-Item -LiteralPath $PatchedPlain -Destination $OutputPath -Force
+$OutputBytes = [System.IO.File]::ReadAllBytes($OutputPath)
+$OutputSig = [System.Text.Encoding]::ASCII.GetString($OutputBytes, 0, 3)
+Write-Host "plain output=$OutputPath"
+Write-Host "output_sig=$OutputSig"
+Write-Host "output_sha256=$((Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant())"
 
 if (-not $KeepTemp) {
     Remove-Item -LiteralPath $Helper -Force -ErrorAction SilentlyContinue
