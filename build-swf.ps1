@@ -1,8 +1,10 @@
 param(
-    [string]$BaseSwf = $env:BASE_SWF,
+    [string]$SourceXml = $env:SOURCE_XML,
     [string]$FfdecCli = $env:FFDEC_CLI,
     [string]$OutFile = "",
+    [string[]]$Script = @(),
     [switch]$ImportAllScripts,
+    [switch]$NoScriptImport,
     [switch]$KeepTemp
 )
 
@@ -11,117 +13,108 @@ $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $RepoRoot
 $BuildTimestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 
+function Resolve-ExistingPath([string]$Given, [string[]]$Candidates, [string]$Label) {
+    if ($Given) {
+        $path = if ([System.IO.Path]::IsPathRooted($Given)) { $Given } else { Join-Path $RepoRoot $Given }
+        if (Test-Path -LiteralPath $path) { return (Resolve-Path -LiteralPath $path).Path }
+        throw "$Label not found: $Given"
+    }
+    foreach ($candidate in $Candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+    throw "$Label not found."
+}
+
 function Resolve-ToolPath([string]$Given, [string[]]$Candidates, [string]$CommandName, [string]$Label) {
-    if ($Given -and (Test-Path -LiteralPath $Given)) { return (Resolve-Path -LiteralPath $Given).Path }
+    if ($Given) {
+        $path = if ([System.IO.Path]::IsPathRooted($Given)) { $Given } else { Join-Path $RepoRoot $Given }
+        if (Test-Path -LiteralPath $path) { return (Resolve-Path -LiteralPath $path).Path }
+        throw "$Label not found: $Given"
+    }
     $cmd = Get-Command $CommandName -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     foreach ($candidate in $Candidates) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) { return (Resolve-Path -LiteralPath $candidate).Path }
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
     }
-    throw "$Label not found. Pass -$Label or set the matching environment variable."
+    throw "$Label not found."
 }
 
-function Resolve-BaseSwf([string]$Given) {
-    if ($Given) {
-        if (Test-Path -LiteralPath $Given) { return (Resolve-Path -LiteralPath $Given).Path }
-        throw "Base SWF not found: $Given"
+function Copy-ScriptForImport([string]$ScriptPath, [string]$ImportRoot) {
+    $full = if ([System.IO.Path]::IsPathRooted($ScriptPath)) { $ScriptPath } else { Join-Path $RepoRoot $ScriptPath }
+    if (-not (Test-Path -LiteralPath $full)) { throw "script not found: $ScriptPath" }
+
+    $scriptsRoot = (Resolve-Path -LiteralPath (Join-Path $RepoRoot 'scripts')).Path
+    $resolved = (Resolve-Path -LiteralPath $full).Path
+    if (-not $resolved.StartsWith($scriptsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "script must be under scripts/: $ScriptPath"
     }
 
-    $baseDir = Join-Path $RepoRoot 'base'
-    if (Test-Path -LiteralPath $baseDir) {
-        $latest = Get-ChildItem -LiteralPath $baseDir -Filter '*.swf' -File |
-            Sort-Object LastWriteTime, Name -Descending |
-            Select-Object -First 1
-        if ($latest) { return $latest.FullName }
-    }
-
-    foreach ($candidate in @((Join-Path $RepoRoot 'base.swf'), (Join-Path $RepoRoot '..\base.swf'))) {
-        if (Test-Path -LiteralPath $candidate) { return (Resolve-Path -LiteralPath $candidate).Path }
-    }
-    throw 'Base SWF not found. Pass -BaseSwf <wrapper-or-decrypted-swf>, set BASE_SWF, or place a timestamped .swf under base/.'
+    $relative = $resolved.Substring($scriptsRoot.Length).TrimStart('\', '/')
+    $target = Join-Path $ImportRoot $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    Copy-Item -LiteralPath $resolved -Destination $target -Force
 }
 
-$BaseSwf = Resolve-BaseSwf $BaseSwf
+$SourceXml = Resolve-ExistingPath $SourceXml @(
+    (Join-Path $RepoRoot 'source\duizhan_622.xml'),
+    (Join-Path $RepoRoot 'source.xml')
+) 'SourceXml'
+
 $FfdecCli = Resolve-ToolPath $FfdecCli @(
-    (Join-Path $RepoRoot 'ffdec-cli.exe'),
-    (Join-Path $RepoRoot 'tools\ffdec-cli.exe'),
     (Join-Path $RepoRoot 'tools\ffdec\ffdec-cli.exe'),
-    (Join-Path $RepoRoot '..\ffdec-cli.exe'),
-    (Join-Path $RepoRoot '..\tools\ffdec-cli.exe')
+    (Join-Path $RepoRoot 'tools\ffdec-cli.exe'),
+    (Join-Path $RepoRoot 'ffdec-cli.exe')
 ) 'ffdec-cli.exe' 'FfdecCli'
-$Python = Resolve-ToolPath $env:PYTHON @() 'python.exe' 'Python'
 
 $BuildDir = Join-Path $RepoRoot 'build'
 if ([string]::IsNullOrWhiteSpace($OutFile)) { $OutFile = "dist\duizhan_build_$BuildTimestamp.swf" }
 $OutputPath = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path $RepoRoot $OutFile }
 $DistDir = Split-Path -Parent $OutputPath
 if (-not $DistDir) { $DistDir = $RepoRoot }
+
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
-$Helper = Join-Path $BuildDir '_swfwrap.py'
-@"
-import hashlib
-import pathlib
-import sys
-import zlib
+$ScaffoldSwf = Join-Path $BuildDir "duizhan_xml_$BuildTimestamp.swf"
+$PatchedSwf = Join-Path $BuildDir "duizhan_imported_$BuildTimestamp.swf"
+$ImportDir = Join-Path $BuildDir "import_$BuildTimestamp"
 
-def read_payload(path):
-    data = pathlib.Path(path).read_bytes()
-    if data[:3] in (b'FWS', b'CWS', b'ZWS'):
-        return data, 'plain', data[:3].decode('ascii')
-    if len(data) < 8:
-        raise SystemExit('input too short')
-    payload = zlib.decompress(data[7:])
-    if payload[:3] not in (b'FWS', b'CWS', b'ZWS'):
-        raise SystemExit('decompressed payload is not SWF')
-    return payload, data[:7].hex(' '), payload[:3].decode('ascii')
+Write-Host "[build] repo      : $RepoRoot"
+Write-Host "[build] source xml: $SourceXml"
+Write-Host "[build] ffdec     : $FfdecCli"
+Write-Host "[build] output    : $OutputPath"
 
-def main():
-    if len(sys.argv) != 4 or sys.argv[1] != 'decrypt':
-        raise SystemExit('usage: _swfwrap.py decrypt <input> <output>')
-    mode, inp, out = sys.argv[1:]
-    payload, head, sig = read_payload(inp)
-    pathlib.Path(out).write_bytes(payload)
-    print(f'decrypt input={inp}')
-    print(f'input_head_or_mode={head}')
-    print(f'payload_sig={sig}')
-    print(f'payload_sha256={hashlib.sha256(payload).hexdigest()}')
+& $FfdecCli -onerror abort -xml2swf $SourceXml $ScaffoldSwf
+if ($LASTEXITCODE -ne 0) { throw 'xml2swf failed' }
 
-if __name__ == '__main__':
-    main()
-"@ | Set-Content -LiteralPath $Helper -Encoding ASCII
+$FinalPlain = $ScaffoldSwf
+if (-not $NoScriptImport) {
+    if ($ImportAllScripts) {
+        Write-Host '[build] import mode: all scripts'
+        $ImportDir = Join-Path $RepoRoot 'scripts'
+    } else {
+        if ($Script.Count -eq 0) {
+            $Script = @('scripts\com\taomee\seer2\app\processor\activity\sniper\SniperPlayAnimation.as')
+        }
+        Write-Host "[build] import mode: selected scripts ($($Script.Count))"
+        if (Test-Path -LiteralPath $ImportDir) { Remove-Item -LiteralPath $ImportDir -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $ImportDir | Out-Null
+        foreach ($scriptPath in $Script) {
+            Copy-ScriptForImport $scriptPath $ImportDir
+            Write-Host "[build] import script: $scriptPath"
+        }
+    }
 
-$BasePlain = Join-Path $BuildDir 'base.decrypted.swf'
-$PatchedPlain = Join-Path $BuildDir 'patched.decrypted.swf'
-$ImportDir = Join-Path $BuildDir 'import-scripts'
-
-Write-Host "[build] repo     : $RepoRoot"
-Write-Host "[build] base swf : $BaseSwf"
-Write-Host "[build] ffdec    : $FfdecCli"
-Write-Host "[build] output   : $OutputPath"
-& $Python $Helper decrypt $BaseSwf $BasePlain
-if ($LASTEXITCODE -ne 0) { throw 'base decrypt failed' }
-
-if (Test-Path -LiteralPath $ImportDir) { Remove-Item -LiteralPath $ImportDir -Recurse -Force }
-if ($ImportAllScripts) {
-    Write-Host '[build] import mode: all scripts'
-    $ImportDir = Join-Path $RepoRoot 'scripts'
-} else {
-    Write-Host '[build] import mode: SniperPlayAnimation only'
-    $SourceScript = Join-Path $RepoRoot 'scripts\com\taomee\seer2\app\processor\activity\sniper\SniperPlayAnimation.as'
-    if (-not (Test-Path -LiteralPath $SourceScript)) { throw "missing patched script: $SourceScript" }
-    $TargetScriptDir = Join-Path $ImportDir 'com\taomee\seer2\app\processor\activity\sniper'
-    New-Item -ItemType Directory -Force -Path $TargetScriptDir | Out-Null
-    Copy-Item -LiteralPath $SourceScript -Destination (Join-Path $TargetScriptDir 'SniperPlayAnimation.as') -Force
+    & $FfdecCli -onerror abort -importScript $ScaffoldSwf $PatchedSwf $ImportDir
+    if ($LASTEXITCODE -ne 0) { throw 'importScript failed' }
+    $FinalPlain = $PatchedSwf
 }
 
-$env:APPDATA = Join-Path $BuildDir 'ffdec-appdata'
-New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
-& $FfdecCli -onerror abort -importScript $BasePlain $PatchedPlain $ImportDir
-if ($LASTEXITCODE -ne 0) { throw 'FFDec importScript failed' }
-
-Copy-Item -LiteralPath $PatchedPlain -Destination $OutputPath -Force
+Copy-Item -LiteralPath $FinalPlain -Destination $OutputPath -Force
 $OutputBytes = [System.IO.File]::ReadAllBytes($OutputPath)
 $OutputSig = [System.Text.Encoding]::ASCII.GetString($OutputBytes, 0, 3)
 Write-Host "plain output=$OutputPath"
@@ -129,6 +122,10 @@ Write-Host "output_sig=$OutputSig"
 Write-Host "output_sha256=$((Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant())"
 
 if (-not $KeepTemp) {
-    Remove-Item -LiteralPath $Helper -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ScaffoldSwf -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $PatchedSwf -Force -ErrorAction SilentlyContinue
+    if ((Test-Path -LiteralPath $ImportDir) -and (-not $ImportAllScripts)) {
+        Remove-Item -LiteralPath $ImportDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 Write-Host '[build] done'
