@@ -1,0 +1,85 @@
+package com.taomee.seer2.app.arena.util
+{
+   import com.taomee.seer2.app.arena.data.AnimiationHitInfo;
+   import com.taomee.seer2.app.config.PetConfig;
+   import org.taomee.ds.HashMap;
+   import seer2.next.entry.DynConfig;
+   
+   public class HitInfoConfig
+   {
+      
+      private static var _hitDatas:HashMap;
+      
+      private static var _hitData:Class = HitInfoConfig__hitData;
+      
+      public function HitInfoConfig()
+      {
+         super();
+      }
+      
+      public static function getHitData(param1:uint) : AnimiationHitInfo
+      {
+         param1 = PetConfig.getPetDefinition(param1).realId;
+         if(_hitDatas == null)
+         {
+            _hitDatas = new HashMap();
+            setup();
+         }
+         var _loc2_:AnimiationHitInfo = _hitDatas.getValue(param1);
+         if(_loc2_ == null)
+         {
+            throw new Error("精灵" + param1 + "没有配置fighters.xml表!");
+         }
+         return _loc2_;
+      }
+      
+      public static function initialize() : void
+      {
+         _hitDatas = new HashMap();
+         setup();
+      }
+      
+      private static function setup() : void
+      {
+         var _loc5_:XML = null;
+         var _loc6_:AnimiationHitInfo = null;
+         var _loc1_:XML = DynConfig.hitInfoConfigXML || new _hitData();
+         var _loc2_:XMLList = _loc1_.child("fighter");
+         var _loc3_:uint = uint(_loc2_.length());
+         var _loc4_:uint = 0;
+         while(_loc4_ < _loc3_)
+         {
+            _loc5_ = _loc2_[_loc4_];
+            _loc6_ = new AnimiationHitInfo();
+            _loc6_.id = _loc5_.@id;
+            _loc6_.attribute = _loc5_.@attribute;
+            _loc6_.critical = _loc5_.@critical;
+            _loc6_.fit = _loc5_.@fit;
+            _loc6_.physics = _loc5_.@physics;
+            _loc6_.special = _loc5_.@special;
+            _loc6_.hasArray = false;
+            _hitDatas.add(_loc6_.id,_loc6_);
+            _loc4_++;
+         }
+         _loc2_ = _loc1_.child("fighterVec");
+         _loc3_ = uint(_loc2_.length());
+         _loc4_ = 0;
+         while(_loc4_ < _loc3_)
+         {
+            _loc5_ = _loc2_[_loc4_];
+            var id:uint = uint(_loc5_.@id);
+            _loc6_ = _hitDatas.getValue(id);
+            _loc6_.attributeArray = _loc5_.@attribute.toString().split(",");
+            _loc6_.criticalArray = _loc5_.@critical.toString().split(",");
+            _loc6_.fitArray = _loc5_.@fit.toString().split(",");
+            _loc6_.physicsArray = _loc5_.@physics.toString().split(",");
+            _loc6_.specialArray = _loc5_.@special.toString().split(",");
+            _loc6_.hasArray = true;
+            _hitDatas.remove(_loc6_.id);
+            _hitDatas.add(_loc6_.id,_loc6_);
+            _loc4_++;
+         }
+      }
+   }
+}
+
