@@ -8,5 +8,4 @@ if errorlevel 1 pause
 if not errorlevel 1 (
   start "" "%~dp0dist"
   echo [build] Done. Check the dist folder.
-  pause
 )
