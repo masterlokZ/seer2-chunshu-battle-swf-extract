@@ -123,6 +123,8 @@ if ($ImportAllScripts) {
     Copy-Item -LiteralPath $SourceScript -Destination (Join-Path $TargetScriptDir 'SniperPlayAnimation.as') -Force
 }
 
+$env:APPDATA = Join-Path $BuildDir 'ffdec-appdata'
+New-Item -ItemType Directory -Force -Path $env:APPDATA | Out-Null
 & $FfdecCli -onerror abort -importScript $BasePlain $PatchedPlain $ImportDir
 if ($LASTEXITCODE -ne 0) { throw 'FFDec importScript failed' }
 
