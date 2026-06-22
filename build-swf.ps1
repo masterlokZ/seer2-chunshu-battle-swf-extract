@@ -59,8 +59,28 @@ function Copy-ScriptForImport([string]$ScriptPath, [string]$ImportRoot) {
     Copy-Item -LiteralPath $resolved -Destination $target -Force
 }
 
+function Expand-GZipFile([string]$InputPath, [string]$OutputPath) {
+    $input = [System.IO.File]::OpenRead($InputPath)
+    try {
+        $gzip = [System.IO.Compression.GZipStream]::new($input, [System.IO.Compression.CompressionMode]::Decompress)
+        try {
+            $output = [System.IO.File]::Create($OutputPath)
+            try {
+                $gzip.CopyTo($output)
+            } finally {
+                $output.Dispose()
+            }
+        } finally {
+            $gzip.Dispose()
+        }
+    } finally {
+        $input.Dispose()
+    }
+}
+
 $SourceXml = Resolve-ExistingPath $SourceXml @(
     (Join-Path $RepoRoot 'source\duizhan_622.xml'),
+    (Join-Path $RepoRoot 'source\duizhan_622.xml.gz'),
     (Join-Path $RepoRoot 'source.xml')
 ) 'SourceXml'
 
@@ -79,6 +99,15 @@ if (-not $DistDir) { $DistDir = $RepoRoot }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
+$SourceXmlForBuild = $SourceXml
+$ExpandedSourceXml = $null
+if ($SourceXml.EndsWith('.gz', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $ExpandedSourceXml = Join-Path $BuildDir "duizhan_source_$BuildTimestamp.xml"
+    Write-Host "[build] expand gz : $SourceXml"
+    Expand-GZipFile $SourceXml $ExpandedSourceXml
+    $SourceXmlForBuild = $ExpandedSourceXml
+}
+
 $ScaffoldSwf = Join-Path $BuildDir "duizhan_xml_$BuildTimestamp.swf"
 $PatchedSwf = Join-Path $BuildDir "duizhan_imported_$BuildTimestamp.swf"
 $ImportDir = Join-Path $BuildDir "import_$BuildTimestamp"
@@ -88,7 +117,7 @@ Write-Host "[build] source xml: $SourceXml"
 Write-Host "[build] ffdec     : $FfdecCli"
 Write-Host "[build] output    : $OutputPath"
 
-& $FfdecCli -onerror abort -xml2swf $SourceXml $ScaffoldSwf
+& $FfdecCli -onerror abort -xml2swf $SourceXmlForBuild $ScaffoldSwf
 if ($LASTEXITCODE -ne 0) { throw 'xml2swf failed' }
 
 $FinalPlain = $ScaffoldSwf
@@ -124,6 +153,9 @@ Write-Host "output_sha256=$((Get-FileHash -LiteralPath $OutputPath -Algorithm SH
 if (-not $KeepTemp) {
     Remove-Item -LiteralPath $ScaffoldSwf -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $PatchedSwf -Force -ErrorAction SilentlyContinue
+    if ($ExpandedSourceXml) {
+        Remove-Item -LiteralPath $ExpandedSourceXml -Force -ErrorAction SilentlyContinue
+    }
     if ((Test-Path -LiteralPath $ImportDir) -and (-not $ImportAllScripts)) {
         Remove-Item -LiteralPath $ImportDir -Recurse -Force -ErrorAction SilentlyContinue
     }
